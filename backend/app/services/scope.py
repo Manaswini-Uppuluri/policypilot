@@ -97,17 +97,21 @@ OUT_OF_DOMAIN_CATEGORIES = [
         ]
     },
     {
-        "category": "science_theory",
+        "category": "science_nature",
         "patterns": [
             r"\b(quantum entanglement|quantum mechanics|theory of relativity|general relativity)\b",
             r"\b(thermodynamics|photosynthesis|mitosis|meiosis|schrodinger|black hole|string theory)\b",
-            r"\b(calculus derivative|integration by parts|quadratic formula|solve equation)\b"
+            r"\b(calculus derivative|integration by parts|quadratic formula|solve equation)\b",
+            r"\b(nutrition(al)? content|calories in|vitamins? in|health benefits? of|protein in)\b",
+            r"\b(solar system|distance to the moon|speed of light|chemical formula of)\b"
         ]
     },
     {
         "category": "programming",
         "patterns": [
             r"\b(teach me|how to code in|write a program|write code in|write a script|debug my code)\b",
+            r"\b(write a python program|write a java program|write a c program|write a cpp program)\b",
+            r"\b(sort an array|reverse a linked list|fibonacci series|bubble sort|binary search)\b",
             r"\b(java recursion|python script|c\+\+ pointer|javascript promise|html css template|sql query)\b",
             r"\b(leetcode|binary tree traversal|quicksort|merge sort|regex for)\b"
         ]
@@ -222,9 +226,8 @@ def classify_query_scope(query: str, history: List[Any] = None) -> Tuple[str, st
                 has_policy_anchor = any(p in q_lower for p in ["policy", "rule", "regulat", "msrit", "attendance", "hostel", "ragging"])
                 if not has_policy_anchor:
                     scope_msg = (
-                        "I'm PolicyPilot, a university policy assistant. I can help with questions about "
-                        "campus regulations, attendance, examinations, hostel rules and student conduct. "
-                        "Your question appears to be outside that scope."
+                        "PolicyPilot is designed to answer questions about university policies. "
+                        "Your question is outside its scope."
                     )
                     return "OUT_OF_SCOPE", scope_msg, None
 
@@ -324,9 +327,8 @@ def classify_query_scope(query: str, history: List[Any] = None) -> Tuple[str, st
             return "IN_SCOPE", "Greeting", clean_q
         
         return "OUT_OF_SCOPE", (
-            "I'm PolicyPilot, a university policy assistant. I can help with questions about "
-            "campus regulations, attendance, examinations, hostel rules and student conduct. "
-            "Your question appears to be outside that scope."
+            "PolicyPilot is designed to answer questions about university policies. "
+            "Your question is outside its scope."
         ), None
 
     # Default to in-scope

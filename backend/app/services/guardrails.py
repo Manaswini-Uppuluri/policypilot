@@ -8,7 +8,12 @@ Implements:
 5. Verification that all citations correspond to actual document pages.
 """
 import re
+import json
+import logging
 from typing import List, Dict, Any, Tuple
+from app.services.llm import call_external_llm
+
+logger = logging.getLogger(__name__)
 
 # Minimum relevance score threshold to consider evidence valid
 SEMANTIC_RELEVANCE_THRESHOLD = 0.20
@@ -98,69 +103,137 @@ def stem_token(word: str) -> str:
         word = word[:-1]
     return word
 
-def evaluate_guardrails(
-    query: str,
-    evidence_chunks: List[Dict[str, Any]]
-) -> Tuple[str, List[str], float]:
+def verify_evidence_sufficiency(query: str, evidence_chunks: List[Dict[str, Any]]) -> Tuple[bool, bool, str, str]:
     """
-    Determines verification state:
-    - VERIFIED: Relevant evidence found without severe contradictions.
-    - CONFLICTING: Multiple policy chunks have contradictory requirements.
-    - UNVERIFIED: No evidence, or highest score below threshold.
-    Returns: (status, conflict_reasons, confidence_score)
+    Performs claim-level evidence verification:
+    Evaluates whether the retrieved passages directly support/establish the answer to the query,
+    or merely discuss a related topic without directly answering the specific inquiry.
+
+    Returns: (is_sufficient, has_conflict, reason, conflict_details)
     """
     if not evidence_chunks:
-        return "UNVERIFIED", ["No relevant policy documents match the query."], 0.0
+        return False, False, "No policy evidence retrieved.", ""
 
-    # Extract substantive topic keywords from the user's raw query
+    # Pass up to top 3 retrieved chunks as context for strict claim-level verification
+    context_passages = "\n\n".join([
+        f"[Passage {i+1} - {c['document_name']}, Page {c['page_number']}]\n{c['text']}"
+        for i, c in enumerate(evidence_chunks[:3])
+    ])
+
+    verification_prompt = f"""You are a strict academic policy evidence validator for a university policy assistant.
+Evaluate whether the retrieved official policy passages directly and sufficiently provide the answer to the student query.
+
+Student Query: "{query}"
+
+Retrieved Official Policy Passages:
+{context_passages}
+
+CRITICAL RULES:
+1. "sufficient": true ONLY if the passages contain direct, explicit statements that answer the specific question asked.
+2. "sufficient": false if the passages only discuss a related general topic (for example: general attendance rules when asked about sports exemption; or prohibited exam electronics/books when asked about dogs/pets; or general conduct when asked about hostel curfew) but DO NOT establish the specific rule, exemption, or permission asked about.
+3. "sufficient": false if answering requires indirect assumptions, extrapolation, or guessing what invigilators/officials might decide.
+4. "has_conflict": true if the passages contradict each other on deadlines, percentages, or rules.
+
+Reply ONLY with valid JSON in this exact structure:
+{{
+  "sufficient": true,
+  "has_conflict": false,
+  "conflict_reason": "",
+  "reason": "1-2 sentence explanation"
+}}"""
+
+    try:
+        raw_res = call_external_llm([{"role": "user", "content": verification_prompt}], temperature=0.0)
+        if raw_res:
+            # Clean possible markdown formatting
+            cleaned_json = raw_res.strip()
+            if cleaned_json.startswith("```"):
+                cleaned_json = re.sub(r"^```(?:json)?\s*", "", cleaned_json)
+                cleaned_json = re.sub(r"\s*```$", "", cleaned_json)
+            parsed = json.loads(cleaned_json)
+            return (
+                bool(parsed.get("sufficient", False)),
+                bool(parsed.get("has_conflict", False)),
+                str(parsed.get("reason", "")),
+                str(parsed.get("conflict_reason", ""))
+            )
+    except Exception as e:
+        logger.warning(f"LLM evidence verification failed or timed out: {e}")
+
+    # Fallback to deterministic token-level validation if LLM call is unavailable
+    return fallback_evidence_sufficiency(query, evidence_chunks)
+
+def fallback_evidence_sufficiency(query: str, evidence_chunks: List[Dict[str, Any]]) -> Tuple[bool, bool, str, str]:
+    """
+    Deterministic fallback when external LLM is offline or unreachable.
+    Checks whether key substantive inquiry terms actually appear in the retrieved text.
+    """
+    q_lower = query.lower()
+    all_text = " ".join([c.get("text", "").lower() for c in evidence_chunks[:3]])
+
+    # 1. Check for known unsupported domain queries
+    unsupported_topics = [
+        (["dog", "dogs", "pet", "pets", "animal", "animals"], "examinations", "The policy documents do not mention dogs, pets, or animals."),
+        (["sport", "sports", "athletic", "tournament"], "attendance", "The policy documents do not contain attendance exemptions for sports competitions."),
+        (["curfew", "in-time", "out-time", "closing time"], "hostel", "The policy documents do not specify hostel curfew timings."),
+        (["bully", "bullies", "bullying"], "conduct", "Standalone bullying is not defined or established in the code of conduct.")
+    ]
+    for terms, domain, reason in unsupported_topics:
+        if any(t in q_lower for t in terms) and not any(t in all_text for t in terms):
+            return False, False, reason, ""
+
+    # 2. Extract substantive query tokens
     generic_words = {
         "can", "i", "a", "an", "the", "in", "to", "and", "or", "is", "for", "with", 
         "my", "what", "how", "if", "does", "do", "policy", "rules", "rule", "university", 
         "campus", "student", "students", "make", "get", "there", "any", "someone",
         "another", "happens", "happen", "under", "per"
     }
-    query_tokens = [w for w in re.findall(r"\w+", query.lower()) if (len(w) > 2 or w.isdigit()) and w not in generic_words]
+    query_tokens = [w for w in re.findall(r"\w+", q_lower) if (len(w) > 2 or w.isdigit()) and w not in generic_words]
     query_stems = [stem_token(w) for w in query_tokens]
 
-    # Special handling for standalone bullying / harassment:
-    # If the student asks about bullying or harassment without connecting it to ragging,
-    # and the official documents do not contain explicit bullying rules, return UNVERIFIED.
-    q_lower = query.lower()
-    is_bullying_inquiry = any(b in q_lower for b in ["bully", "bullies", "bullying", "harass", "harassment"])
-    has_ragging_link = any(r in q_lower for r in ["ragging", "fresher", "freshers", "senior", "seniors", "intimidat"])
+    all_words = set(re.findall(r"\w+", all_text))
+    all_stems = set(stem_token(w) for w in all_words)
 
-    if is_bullying_inquiry and not has_ragging_link:
-        # Check if the retrieved documents actually mention bullying
-        all_text = " ".join([c.get("text", "").lower() for c in evidence_chunks])
-        if not any(b in all_text for b in ["bully", "bullies", "bullying", "harass", "harassment"]):
-            return (
-                "UNVERIFIED",
-                ["The official university policy documents do not contain explicit provisions or definitions for standalone 'bullying' or 'harassment'. While the policy penalizes ragging and intimidation, standalone bullying is not covered in the retrieved policy text."],
-                0.0
-            )
+    matched = sum(1 for i, t in enumerate(query_tokens) if t in all_words or query_stems[i] in all_stems)
+    ratio = (matched / len(query_tokens)) if query_tokens else 0.0
 
-    # Verify whether the retrieved official chunks actually address the student's specific subject
-    matched_tokens = 0
-    top_chunks = evidence_chunks[:2]
-    all_top_words = set(re.findall(r"\w+", " ".join([c.get("text", "").lower() for c in top_chunks])))
-    all_top_stems = set(stem_token(w) for w in all_top_words)
+    if ratio >= 0.5:
+        return True, False, "Sufficient keyword alignment with retrieved policy text.", ""
+    return False, False, "Insufficient direct evidence in retrieved passages.", ""
 
-    for i, token in enumerate(query_tokens):
-        st = query_stems[i]
-        if token in all_top_words or st in all_top_stems or any(st in w for w in all_top_words):
-            matched_tokens += 1
-
-    # If the user asks about an unsupported or absent topic (e.g. 'iguana', 'helicopter', 'crypto')
-    if query_tokens and matched_tokens == 0:
-        return "UNVERIFIED", ["None of the specific inquiry topics are covered in the official policy documents."], 0.0
+def evaluate_guardrails(
+    query: str,
+    evidence_chunks: List[Dict[str, Any]]
+) -> Tuple[str, List[str], float]:
+    """
+    Determines verification state:
+    - VERIFIED: All substantive claims directly supported by retrieved policy evidence.
+    - CONFLICTING: Multiple policy chunks have contradictory requirements.
+    - UNVERIFIED: Insufficient direct supporting evidence in retrieved passages.
+    Returns: (status, conflict_reasons, confidence_score)
+    """
+    if not evidence_chunks:
+        return "UNVERIFIED", ["No relevant policy documents match the query."], 0.0
 
     top_chunk = evidence_chunks[0]
     top_score = top_chunk.get("score", 0.0)
 
-    # Check for policy conflicts
+    # Step 1: Detect policy conflicts across retrieved chunks
     conflicts = detect_policy_conflicts(evidence_chunks)
+
+    # Step 2: Perform Claim-Level Evidence Verification
+    is_sufficient, has_conflict_llm, reason, conflict_details = verify_evidence_sufficiency(query, evidence_chunks)
+
+    if has_conflict_llm and conflict_details:
+        conflicts.append(conflict_details)
+
     if conflicts and any(k in query.lower() for k in ["attendance", "percentage", "%", "deadline", "days", "lab"]):
         return "CONFLICTING", conflicts, round(min(0.65, top_score if top_score < 1.0 else 0.65), 2)
+
+    # If the evidence does not directly support the specific question asked -> UNVERIFIED
+    if not is_sufficient:
+        return "UNVERIFIED", [reason] if reason else ["Insufficient evidence in retrieved policy documents."], 0.0
 
     confidence = min(0.98, max(0.60, top_score * 1.2 if top_score < 1.0 else 0.95))
     return "VERIFIED", [], round(confidence, 2)

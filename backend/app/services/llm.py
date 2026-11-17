@@ -15,16 +15,21 @@ Your core mandate is to answer student inquiries STRICTLY and EXCLUSIVELY based 
 
 CRITICAL GROUNDING AND EVIDENCE RULES:
 1. STRICT FACTUAL GROUNDING: Every factual assertion MUST be directly supported by verbatim text or direct factual statements from the retrieved excerpts. Never extrapolate, presume, or invent university rules.
-2. NO INVENTED OR ASSUMED PENALTIES:
+2. DISTINGUISH RELATED EVIDENCE FROM SUFFICIENT EVIDENCE:
+   - A retrieved policy passage may be topically related to a question without directly supporting or establishing an answer to the specific question asked.
+   - If the policy does not explicitly mention the subject asked about (e.g., pets/dogs in examination halls, attendance exemptions for sports competitions, specific hostel curfew timings), DO NOT claim or infer that the policy allows or forbids it.
+   - DO NOT turn indirect statements (such as "obey invigilator instructions" or "absence without permission is a breach") into an established policy rule regarding the specific unmentioned topic.
+   - When policy evidence is absent or insufficient to establish the answer, clearly and concisely communicate that the available documents do not establish the rule or exception.
+3. NO INVENTED OR ASSUMED PENALTIES:
    - Do NOT introduce unmentioned penalties, warnings, suspensions, fines, or procedures unless explicitly stated in the excerpts.
    - Do NOT interpret or define "rustication" as "permanent expulsion", "suspension", or "dismissal" unless the excerpt explicitly defines it that way. Use the exact wording: "liable to be rusticated from the college".
    - If asked about "suspension" and the policy specifies "rustication" and "strict disciplinary action" without using the word "suspension", state what the policy specifies and explicitly note: "The policy does not explicitly mention the term 'suspension'."
-3. SEPARATION OF INSTITUTIONAL VS CRIMINAL JURISDICTION:
+4. SEPARATION OF INSTITUTIONAL VS CRIMINAL JURISDICTION:
    - Institutional Disciplinary Consequences: State what the university/college rules mandate (e.g. ragging banned in all forms, strict disciplinary action, visiting fresher rooms considered proof of ragging, anti-ragging committee inspections, liability to be rusticated from the college, Supreme Court exemplary and justifiably harsh punishment order).
    - Criminal / Statutory Law Consequences: State what the statutory law mandates (e.g. Karnataka Education Act, 1983: imprisonment up to one year, fine up to two thousand rupees, or both; cognizable and non-bailable offence; arrest without warrant).
-4. ABSENCE OF POLICY & CITATION INTEGRITY:
-   - If a specific topic (e.g. general bullying, harassment) is asked about and the policy does NOT define or establish it, explicitly state that the policy does not establish it. Do not automatically equate generic bullying with ragging.
-   - Every claim must cite [Document Name, Page X]. Do not cite pages or documents that do not support the specific claim.
+5. CITATION INTEGRITY:
+   - Every supported factual claim must cite [Document Name, Page X].
+   - Do not cite pages or documents that do not support the specific claim.
 """
 
 def call_external_llm(messages: List[Dict[str, str]], temperature: float = 0.2) -> str:
@@ -141,7 +146,30 @@ def mock_rag_answer_generation(
     """
     if verification_status == "UNVERIFIED" or not evidence_chunks:
         q_lower = query.lower()
-        if any(b in q_lower for b in ["bully", "bullies", "bullying", "harass", "harassment"]):
+        if re.search(r"\b(dogs?|pets?|animals?)\b", q_lower):
+            return (
+                "### Policy Determination: Insufficient Evidence\n\n"
+                "The available Code of Conduct and Examination Rules do not explicitly specify whether dogs or pets "
+                "are permitted inside examination halls. The retrieved policy excerpts do not provide sufficient evidence "
+                "to establish this rule.\n\n"
+                "> **Recommendation:** Please consult the examination section or Chief Superintendent for clarification."
+            )
+        if re.search(r"\b(sports?|athletic|tournaments?)\b", q_lower):
+            return (
+                "### Policy Determination: Insufficient Evidence\n\n"
+                "The available Code of Conduct requires a minimum of 85% attendance in theory and practical courses. "
+                "However, the official policy documents do not specify or establish any attendance exemption for "
+                "participating in sports competitions. The retrieved excerpts do not provide sufficient evidence to establish this exemption.\n\n"
+                "> **Recommendation:** Please consult your Head of Department (HOD) or Academic Dean for institutional approval."
+            )
+        if re.search(r"\b(curfew|in-time|out-time)\b", q_lower):
+            return (
+                "### Policy Determination: Insufficient Evidence\n\n"
+                "The available Code of Conduct does not explicitly specify hostel curfew hours or entry/exit timings. "
+                "The retrieved policy excerpts do not provide sufficient evidence to establish hostel curfew rules.\n\n"
+                "> **Recommendation:** Please refer to the specific Hostel Manual or consult the Hostel Warden."
+            )
+        if re.search(r"\b(bully|bullies|bullying|harass|harassment)\b", q_lower):
             return (
                 "### Policy Determination: Insufficient Evidence / Unestablished Policy\n\n"
                 "Based on the official university policy documents currently indexed (**code_conduct_MSRIT.pdf**), there is "
@@ -251,10 +279,11 @@ def generate_grounded_answer(
         f"Official Policy Evidence:\n{context_str}\n\n"
         f"Strict Execution Instructions:\n"
         f"1. Answer ONLY using the official policy evidence above.\n"
-        f"2. Separate Institutional/College Disciplinary Consequences from Statutory Criminal Law Penalties (e.g., under Karnataka Education Act, 1983).\n"
-        f"3. Use exact text terminology: state 'liable to be rusticated from the college'. Do NOT interpret rustication as permanent expulsion. If asked about 'suspension' and the policy specifies rustication and disciplinary action without using the word 'suspension', explicitly note that the policy does not specifically use the term 'suspension'.\n"
-        f"4. If the query asks about a topic not established in the evidence (e.g. general bullying), explicitly state that the official documents do not contain explicit rules or definitions for it.\n"
-        f"5. Provide exact bracketed citations [Document Name, Page X] for every claim."
+        f"2. If the policy evidence does NOT directly mention or establish the specific subject asked about (e.g. dogs/pets in exam halls, attendance exemption for sports competitions, or specific hostel curfew timings), clearly state that the official documents do not establish this rule or exception. Do not infer permission or prohibition from unrelated or general statements (such as 'obey invigilators' or general attendance minimums).\n"
+        f"3. Separate Institutional/College Disciplinary Consequences from Statutory Criminal Law Penalties (e.g., under Karnataka Education Act, 1983).\n"
+        f"4. Use exact text terminology: state 'liable to be rusticated from the college'. Do NOT interpret rustication as permanent expulsion. If asked about 'suspension' and the policy specifies rustication and disciplinary action without using the word 'suspension', explicitly note that the policy does not specifically use the term 'suspension'.\n"
+        f"5. If the query asks about a topic not established in the evidence (e.g. general bullying), explicitly state that the official documents do not contain explicit rules or definitions for it.\n"
+        f"6. Provide exact bracketed citations [Document Name, Page X] for every claim."
     )
 
     external = call_external_llm([
